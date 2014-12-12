@@ -33,20 +33,23 @@ var m = (function app(window, undefined) {
 	 */
 	function m() {
 		var args = [].slice.call(arguments);
+		var isComponent = type.call(args[0]) === OBJECT && components[args[0].tag];
 		var hasAttrs = args[1] != null && type.call(args[1]) === OBJECT && !("tag" in args[1]) && !("subtree" in args[1]);
 		var attrs = hasAttrs ? args[1] : {};
 		var classAttrName = "class" in attrs ? "class" : "className";
 		var cell = {tag: "div", attrs: {}};
 		var match, classes = [];
-		if (type.call(args[0]) != STRING) throw new Error("selector in m(selector, attrs, children) should be a string")
-		while (match = parser.exec(args[0])) {
-			if (match[1] === "" && match[2]) cell.tag = match[2];
-			else if (match[1] === "#") cell.attrs.id = match[2];
-			else if (match[1] === ".") classes.push(match[2]);
-			else if (match[3][0] === "[") {
-				var pair = attrParser.exec(match[3]);
-				cell.attrs[pair[1]] = pair[3] || (pair[2] ? "" :true)
-			}
+		if (!isComponent){
+			if (type.call(args[0]) != STRING) throw new Error("selector in m(selector, attrs, children) should be a string")
+			while (match = parser.exec(args[0])) {
+				if (match[1] === "" && match[2]) cell.tag = match[2];
+				else if (match[1] === "#") cell.attrs.id = match[2];
+				else if (match[1] === ".") classes.push(match[2]);
+				else if (match[3][0] === "[") {
+					var pair = attrParser.exec(match[3]);
+					cell.attrs[pair[1]] = pair[3] || (pair[2] ? "" :true)
+				}
+			}			
 		}
 		if (classes.length > 0) cell.attrs[classAttrName] = classes.join(" ");
 
@@ -63,7 +66,12 @@ var m = (function app(window, undefined) {
 			if (attrName === classAttrName) cell.attrs[attrName] = (cell.attrs[attrName] || "") + " " + attrs[attrName];
 			else cell.attrs[attrName] = attrs[attrName]
 		}
-		return cell
+
+		// if its a registerable component, recurse into its own redraw function
+		var component = (cell.attrs.id!=undefined || (cell.attrs.model && attrs.model.id!=undefined)) && (isComponent || components[cell.tag]);
+		return component
+			? redrawComponent(component, mergeAttrs(cell.attrs, args[0].attrs || {}), cell.children) 
+			: cell;
 	}
 	function build(parentElement, parentTag, parentCache, parentIndex, data, cached, shouldReattach, index, editable, namespace, configs) {
 		//`build` is a recursive function that manages creation/diffing/removal of DOM elements based on comparison between `data` and `cached`
@@ -475,9 +483,14 @@ var m = (function app(window, undefined) {
 		return gettersetter(store)
 	};
 
-	var roots = [], modules = [], controllers = [], lastRedrawId = null, lastRedrawCallTime = 0, computePostRedrawHook = null, prevented = false, topModule;
+	var roots = [], modules = [], components = {}, controllers = [], lastRedrawId = null, lastRedrawCallTime = 0, computePostRedrawHook = null, prevented = false, topModule;
 	var FRAME_BUDGET = 16; //60 frames per second = 1 call per 16 ms
 	m.module = function(root, module) {
+		if (type.call(root) == STRING){
+			// nothing more to do here, component initialization is deferred
+			// to first redraw
+			return components[root] = module;
+		}
 		var index = roots.indexOf(root);
 		if (index < 0) index = roots.length;
 		var isPrevented = false;
@@ -522,11 +535,15 @@ var m = (function app(window, undefined) {
 	m.redraw.strategy = m.prop();
 	function redraw() {
 		var forceRedraw = m.redraw.strategy() === "all";
+		if (forceRedraw){
+			redrawnComponents={};
+		}
 		for (var i = 0, root; root = roots[i]; i++) {
 			if (controllers[i]) {
 				m.render(root, modules[i].view(controllers[i]), forceRedraw)
 			}
 		}
+		cachedComponents = redrawnComponents;
 		//after rendering within a routed context, we need to scroll back to the top, and fetch the document title for history.pushState
 		if (computePostRedrawHook) {
 			computePostRedrawHook();
@@ -535,6 +552,31 @@ var m = (function app(window, undefined) {
 		lastRedrawId = null;
 		lastRedrawCallTime = new Date;
 		m.redraw.strategy("diff")
+	}
+	function mergeAttrs(cellAttrs,attrs,filter){
+		var classAttrName = "class" in cellAttrs ? "class" : "className";
+		var classes = cellAttrs[classAttrName];
+		Object.keys(attrs).forEach(function(k){
+			if (k.indexOf('class')>=0){
+				classes += ' ' + attrs[k];
+			} else if (k!=filter) {
+				cellAttrs[k] = attrs[k];
+			}
+		}); 
+		if (classes) {
+			cellAttrs[classAttrName]=classes;
+		}
+		return cellAttrs;
+	}
+	var redrawnComponents={}, cachedComponents = {};
+	function redrawComponent (module, attrs, children) {
+		// once only component initialization
+		var id = (attrs.model && attrs.model.id) || attrs.id;
+		var ctrl = cachedComponents[id] || new module.controller(attrs.model);
+		redrawnComponents[id]=ctrl;
+		var cell = module.view(ctrl,children);
+		mergeAttrs(cell.attrs,attrs,'model');
+		return cell;
 	}
 
 	var pendingRequests = 0;
