@@ -536,14 +536,13 @@ var m = (function app(window, undefined) {
 	function redraw() {
 		var forceRedraw = m.redraw.strategy() === "all";
 		if (forceRedraw){
-			redrawnComponents={};
+			cachedComponents={};
 		}
 		for (var i = 0, root; root = roots[i]; i++) {
 			if (controllers[i]) {
 				m.render(root, modules[i].view(controllers[i]), forceRedraw)
 			}
 		}
-		cachedComponents = redrawnComponents;
 		//after rendering within a routed context, we need to scroll back to the top, and fetch the document title for history.pushState
 		if (computePostRedrawHook) {
 			computePostRedrawHook();
@@ -573,7 +572,7 @@ var m = (function app(window, undefined) {
 		// once only component initialization
 		var id = (attrs.model && attrs.model.id) || attrs.id;
 		var ctrl = cachedComponents[id] || new module.controller(attrs.model);
-		redrawnComponents[id]=ctrl;
+		cachedComponents[id]=ctrl;
 		var cell = module.view(ctrl,children);
 		mergeAttrs(cell.attrs,attrs,'model');
 		return cell;
