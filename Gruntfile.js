@@ -1,7 +1,7 @@
 module.exports = function(grunt) {
 	_ = require('lodash');
 
-	var version = "0.1.26";
+	var version = "0.1.30";
 
 	var inputFolder = "./docs";
 	var tempFolder = "./temp";
@@ -51,9 +51,11 @@ module.exports = function(grunt) {
 	var md2htmlTasks = {};
 	var makeTasks = function(layout, pages) {
 		pages.map(function(name) {
+			var src = inputFolder + "/" + name + ".md";
+			var title = (grunt.file.exists(src)) ? grunt.file.read(src).split(/\n/)[0].substring(3) + ' - ' : '';
 			md2htmlTasks[name] = {
-				options: {layout: inputFolder + "/layout/" + layout + ".html"},
-				files: [{src: [inputFolder + "/" + name + ".md"], dest: tempFolder + "/" + name + ".html"}]
+				options: {layout: inputFolder + "/layout/" + layout + ".html", templateData: { "topic": title }},
+				files: [{src: [src], dest: tempFolder + "/" + name + ".html"}]
 			}
 		})
 	};
@@ -148,6 +150,7 @@ module.exports = function(grunt) {
 			comparisons: {expand: true, cwd: inputFolder + "/layout/comparisons/", src: "./**", dest: currentVersionArchiveFolder + "/comparisons/"},
 			unminified: {src: "mithril.js", dest: currentVersionArchiveFolder + "/mithril.js"},
 			minified: {src: "mithril.min.js", dest: currentVersionArchiveFolder + "/mithril.min.js"},
+			readme: {src: "README.md", dest: currentVersionArchiveFolder + "/README.md"},
 			map: {src: "mithril.min.js.map", dest: currentVersionArchiveFolder + "/mithril.min.js.map"},
 			typescript: {src: "mithril.d.ts", dest: currentVersionArchiveFolder + "/mithril.d.ts"},
 			publish: {expand: true, cwd: currentVersionArchiveFolder, src: "./**", dest: outputFolder},
@@ -182,6 +185,16 @@ module.exports = function(grunt) {
 		clean: {
 			options: {force: true},
 			generated: [tempFolder]
+		},
+		jsfmt: {
+			default: {
+				files: [{
+					expand: true,
+					src: ['mithril.js'],
+					cwd: '.',
+					dest: '.'
+				}]
+			}
 		}
 	});
 
@@ -196,6 +209,7 @@ module.exports = function(grunt) {
 	grunt.loadNpmTasks('grunt-contrib-qunit');
 	grunt.loadNpmTasks('grunt-contrib-connect');
 	grunt.loadNpmTasks('grunt-saucelabs');
+	grunt.loadNpmTasks('grunt-jsfmt');
 
 	grunt.registerTask("build", ["test", "uglify", "zip", "md2html", "replace", "copy", "clean"]);
 	grunt.registerTask("testall", ["test", "teste2e"]);

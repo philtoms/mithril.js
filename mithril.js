@@ -18,13 +18,13 @@ var m = (function app(window, undefined) {
 	initialize(window);
 
 
-	/*
+	/**
 	 * @typedef {String} Tag
 	 * A string that looks like -> div.classname#id[param=one][param2=two]
 	 * Which describes a DOM node
 	 */
 
-	/*
+	/**
 	 *
 	 * @param {Tag} The DOM node tag
 	 * @param {Object=[]} optional key-value pairs to be mapped to DOM attrs
@@ -33,45 +33,39 @@ var m = (function app(window, undefined) {
 	 */
 	function m() {
 		var args = [].slice.call(arguments);
-		var isComponent = type.call(args[0]) === OBJECT && components[args[0].tag];
 		var hasAttrs = args[1] != null && type.call(args[1]) === OBJECT && !("tag" in args[1]) && !("subtree" in args[1]);
 		var attrs = hasAttrs ? args[1] : {};
 		var classAttrName = "class" in attrs ? "class" : "className";
 		var cell = {tag: "div", attrs: {}};
 		var match, classes = [];
-		if (!isComponent){
-			if (type.call(args[0]) != STRING) throw new Error("selector in m(selector, attrs, children) should be a string")
-			while (match = parser.exec(args[0])) {
-				if (match[1] === "" && match[2]) cell.tag = match[2];
-				else if (match[1] === "#") cell.attrs.id = match[2];
-				else if (match[1] === ".") classes.push(match[2]);
-				else if (match[3][0] === "[") {
-					var pair = attrParser.exec(match[3]);
-					cell.attrs[pair[1]] = pair[3] || (pair[2] ? "" :true)
-				}
-			}			
+		if (type.call(args[0]) != STRING) throw new Error("selector in m(selector, attrs, children) should be a string")
+		while (match = parser.exec(args[0])) {
+			if (match[1] === "" && match[2]) cell.tag = match[2];
+			else if (match[1] === "#") cell.attrs.id = match[2];
+			else if (match[1] === ".") classes.push(match[2]);
+			else if (match[3][0] === "[") {
+				var pair = attrParser.exec(match[3]);
+				cell.attrs[pair[1]] = pair[3] || (pair[2] ? "" :true)
+			}
 		}
 		if (classes.length > 0) cell.attrs[classAttrName] = classes.join(" ");
 
 
-		var children = hasAttrs ? args[2] : args[1];
-		if (type.call(children) === ARRAY) {
-			cell.children = children
+		var children = hasAttrs ? args.slice(2) : args.slice(1);
+		if (children.length === 1 && type.call(children[0]) === ARRAY) {
+			cell.children = children[0]
 		}
 		else {
-			cell.children = hasAttrs ? args.slice(2) : args.slice(1)
+			cell.children = children
 		}
 
 		for (var attrName in attrs) {
-			if (attrName === classAttrName) cell.attrs[attrName] = (cell.attrs[attrName] || "") + " " + attrs[attrName];
+			if (attrName === classAttrName) {
+				if (attrs[attrName] !== "") cell.attrs[attrName] = (cell.attrs[attrName] || "") + " " + attrs[attrName];
+			}
 			else cell.attrs[attrName] = attrs[attrName]
 		}
-
-		// if its a registerable component, recurse into its own redraw function
-		var component = (cell.attrs.id!=undefined || (cell.attrs.model && attrs.model.id!=undefined)) && (isComponent || components[cell.tag]);
-		return component
-			? redrawComponent(component, mergeAttrs(cell.attrs, args[0].attrs || {}), cell.children) 
-			: cell;
+		return cell
 	}
 	function build(parentElement, parentTag, parentCache, parentIndex, data, cached, shouldReattach, index, editable, namespace, configs) {
 		//`build` is a recursive function that manages creation/diffing/removal of DOM elements based on comparison between `data` and `cached`
@@ -99,6 +93,7 @@ var m = (function app(window, undefined) {
 		//there's logic that relies on the assumption that null and undefined data are equivalent to empty strings
 		//- this prevents lifecycle surprises from procedural helpers that mix implicit and explicit return statements (e.g. function foo() {if (cond) return m("div")}
 		//- it simplifies diffing code
+		//data.toString() is null if data is the return value of Console.log in Firefox
 		if (data == null || data.toString() == null) data = "";
 		if (data.subtree === "retain") return cached;
 		var cachedType = type.call(cached), dataType = type.call(data);
@@ -122,9 +117,10 @@ var m = (function app(window, undefined) {
 				if (type.call(data[i]) === ARRAY) {
 					data = data.concat.apply([], data);
 					i-- //check current index again and flatten until there are no more nested arrays at that index
+					len = data.length
 				}
 			}
-			
+
 			var nodes = [], intact = cached.length === data.length, subArrayCount = 0;
 
 			//keys algorithm: sort elements without recreating them if keys are present
@@ -135,7 +131,7 @@ var m = (function app(window, undefined) {
 			//5) copy unkeyed items into their respective gaps
 			var DELETION = 1, INSERTION = 2 , MOVE = 3;
 			var existing = {}, unkeyed = [], shouldMaintainIdentities = false;
-			for (var i = 0, len = cached.length; i < len; i++) {
+			for (var i = 0; i < cached.length; i++) {
 				if (cached[i] && cached[i].attrs && cached[i].attrs.key != null) {
 					shouldMaintainIdentities = true;
 					existing[cached[i].attrs.key] = {action: DELETION, index: i}
@@ -143,52 +139,65 @@ var m = (function app(window, undefined) {
 			}
 			if (shouldMaintainIdentities) {
 				if (data.indexOf(null) > -1) data = data.filter(function(x) {return x != null})
-				for (var i = 0, len = data.length; i < len; i++) {
-					if (data[i] && data[i].attrs) {
-						if (data[i].attrs.key != null) {
-							var key = data[i].attrs.key;
-							if (!existing[key]) existing[key] = {action: INSERTION, index: i};
-							else existing[key] = {
-								action: MOVE,
-								index: i,
-								from: existing[key].index,
-								element: parentElement.childNodes[existing[key].index] || $document.createElement("div")
+				
+				var keysDiffer = false
+				if (data.length != cached.length) keysDiffer = true
+				else for (var i = 0, cachedCell, dataCell; cachedCell = cached[i], dataCell = data[i]; i++) {
+					if (cachedCell.attrs && dataCell.attrs && cachedCell.attrs.key != dataCell.attrs.key) {
+						keysDiffer = true
+						break
+					}
+				}
+				
+				if (keysDiffer) {
+					for (var i = 0, len = data.length; i < len; i++) {
+						if (data[i] && data[i].attrs) {
+							if (data[i].attrs.key != null) {
+								var key = data[i].attrs.key;
+								if (!existing[key]) existing[key] = {action: INSERTION, index: i};
+								else existing[key] = {
+									action: MOVE,
+									index: i,
+									from: existing[key].index,
+									element: cached.nodes[existing[key].index] || $document.createElement("div")
+								}
 							}
+							else unkeyed.push({index: i, element: parentElement.childNodes[i] || $document.createElement("div")})
 						}
-						else unkeyed.push({index: i, element: parentElement.childNodes[i] || $document.createElement("div")})
 					}
-				}
-				var actions = Object.keys(existing).map(function(key) {return existing[key]});
-				var changes = actions.sort(function(a, b) {return a.action - b.action || a.index - b.index});
-				var newCached = cached.slice();
+					var actions = []
+					for (var prop in existing) actions.push(existing[prop])
+					var changes = actions.sort(sortChanges);
+					var newCached = new Array(cached.length)
 
-				for (var i = 0, change; change = changes[i]; i++) {
-					if (change.action === DELETION) {
-						clear(cached[change.index].nodes, cached[change.index]);
-						newCached.splice(change.index, 1)
-					}
-					if (change.action === INSERTION) {
-						var dummy = $document.createElement("div");
-						dummy.key = data[change.index].attrs.key;
-						parentElement.insertBefore(dummy, parentElement.childNodes[change.index] || null);
-						newCached.splice(change.index, 0, {attrs: {key: data[change.index].attrs.key}, nodes: [dummy]})
-					}
-
-					if (change.action === MOVE) {
-						if (parentElement.childNodes[change.index] !== change.element && change.element !== null) {
-							parentElement.insertBefore(change.element, parentElement.childNodes[change.index] || null)
+					for (var i = 0, change; change = changes[i]; i++) {
+						if (change.action === DELETION) {
+							clear(cached[change.index].nodes, cached[change.index]);
+							newCached.splice(change.index, 1)
 						}
-						newCached[change.index] = cached[change.from]
+						if (change.action === INSERTION) {
+							var dummy = $document.createElement("div");
+							dummy.key = data[change.index].attrs.key;
+							parentElement.insertBefore(dummy, parentElement.childNodes[change.index] || null);
+							newCached.splice(change.index, 0, {attrs: {key: data[change.index].attrs.key}, nodes: [dummy]})
+						}
+
+						if (change.action === MOVE) {
+							if (parentElement.childNodes[change.index] !== change.element && change.element !== null) {
+								parentElement.insertBefore(change.element, parentElement.childNodes[change.index] || null)
+							}
+							newCached[change.index] = cached[change.from]
+						}
 					}
+					for (var i = 0, len = unkeyed.length; i < len; i++) {
+						var change = unkeyed[i];
+						parentElement.insertBefore(change.element, parentElement.childNodes[change.index] || null);
+						newCached[change.index] = cached[change.index]
+					}
+					cached = newCached;
+					cached.nodes = new Array(parentElement.childNodes.length);
+					for (var i = 0, child; child = parentElement.childNodes[i]; i++) cached.nodes[i] = child
 				}
-				for (var i = 0, len = unkeyed.length; i < len; i++) {
-					var change = unkeyed[i];
-					parentElement.insertBefore(change.element, parentElement.childNodes[change.index] || null);
-					newCached[change.index] = cached[change.index]
-				}
-				cached = newCached;
-				cached.nodes = [];
-				for (var i = 0, child; child = parentElement.childNodes[i]; i++) cached.nodes.push(child)
 			}
 			//end key algorithm
 
@@ -201,7 +210,7 @@ var m = (function app(window, undefined) {
 					//fix offset of next element if item was a trusted string w/ more than one html element
 					//the first clause in the regexp matches elements
 					//the second clause (after the pipe) matches text nodes
-					subArrayCount += (item.match(/<[^\/]|\>\s*[^<]/g) || []).length
+					subArrayCount += (item.match(/<[^\/]|\>\s*[^<]|&/g) || []).length
 				}
 				else subArrayCount += type.call(item) === ARRAY ? item.length : 1;
 				cached[cacheCount++] = item
@@ -226,7 +235,7 @@ var m = (function app(window, undefined) {
 			if (!data.attrs) data.attrs = {};
 			if (!cached.attrs) cached.attrs = {};
 
-			var dataAttrKeys = Object.keys(data.attrs);
+			var dataAttrKeys = Object.keys(data.attrs)
 			var hasKeys = dataAttrKeys.length > ("key" in data.attrs ? 1 : 0)
 			//if an element is different enough from the one in cache, recreate it
 			if (data.tag != cached.tag || dataAttrKeys.join() != Object.keys(cached.attrs).join() || data.attrs.id != cached.attrs.id) {
@@ -245,7 +254,7 @@ var m = (function app(window, undefined) {
 				cached = {
 					tag: data.tag,
 					//set attributes first, then create children
-					attrs: dataAttrKeys.length ? setAttributes(node, data.tag, data.attrs, {}, namespace) : {},
+					attrs: hasKeys ? setAttributes(node, data.tag, data.attrs, {}, namespace) : data.attrs,
 					children: data.children != null && data.children.length > 0 ?
 						build(node, data.tag, undefined, undefined, data.children, cached.children, true, 0, data.attrs.contenteditable ? node : editable, namespace, configs) :
 						data.children,
@@ -258,7 +267,7 @@ var m = (function app(window, undefined) {
 			}
 			else {
 				node = cached.nodes[0];
-				if (dataAttrKeys.length) setAttributes(node, data.tag, data.attrs, cached.attrs, namespace);
+				if (hasKeys) setAttributes(node, data.tag, data.attrs, cached.attrs, namespace);
 				cached.children = build(node, data.tag, undefined, undefined, data.children, cached.children, false, 0, data.attrs.contenteditable ? node : editable, namespace, configs);
 				cached.nodes.intact = true;
 				if (shouldReattach === true && node != null) parentElement.insertBefore(node, parentElement.childNodes[index] || null)
@@ -320,6 +329,7 @@ var m = (function app(window, undefined) {
 
 		return cached
 	}
+	function sortChanges(a, b) {return a.action - b.action || a.index - b.index}
 	function setAttributes(node, tag, dataAttrs, cachedAttrs, namespace) {
 		for (var attrName in dataAttrs) {
 			var dataAttr = dataAttrs[attrName];
@@ -328,8 +338,7 @@ var m = (function app(window, undefined) {
 				cachedAttrs[attrName] = dataAttr;
 				try {
 					//`config` isn't a real attributes, so ignore it
-					//we don't ignore `key` because it must be unique and having it on the DOM helps debugging
-					if (attrName === "config") continue;
+					if (attrName === "config" || attrName == "key") continue;
 					//hook event handlers to the auto-redrawing system
 					else if (typeof dataAttr === FUNCTION && attrName.indexOf("on") === 0) {
 						node[attrName] = autoredraw(dataAttr, node)
@@ -354,7 +363,7 @@ var m = (function app(window, undefined) {
 					//- when using CSS selectors (e.g. `m("[style='']")`), style is used as a string, but it's an object in js
 					else if (attrName in node && !(attrName === "list" || attrName === "style" || attrName === "form" || attrName === "type")) {
 						//#348 don't set the value if not needed otherwise cursor placement breaks in Chrome
-						if (attrName != "input" || node[attrName] !== dataAttr) node[attrName] = dataAttr
+						if (tag !== "input" || node[attrName] !== dataAttr) node[attrName] = dataAttr
 					}
 					else node.setAttribute(attrName, dataAttr)
 				}
@@ -483,14 +492,10 @@ var m = (function app(window, undefined) {
 		return gettersetter(store)
 	};
 
-	var roots = [], modules = [], components = {}, controllers = [], lastRedrawId = null, lastRedrawCallTime = 0, computePostRedrawHook = null, prevented = false, topModule;
+	var roots = [], modules = [], controllers = [], lastRedrawId = null, lastRedrawCallTime = 0, computePostRedrawHook = null, prevented = false, topModule;
 	var FRAME_BUDGET = 16; //60 frames per second = 1 call per 16 ms
 	m.module = function(root, module) {
-		if (type.call(root) == STRING){
-			// nothing more to do here, component initialization is deferred
-			// to first redraw
-			return components[root] = module;
-		}
+		if (!root) throw new Error("Please ensure the DOM element exists before rendering a template into it.");
 		var index = roots.indexOf(root);
 		if (index < 0) index = roots.length;
 		var isPrevented = false;
@@ -504,8 +509,8 @@ var m = (function app(window, undefined) {
 			m.redraw.strategy("all");
 			m.startComputation();
 			roots[index] = root;
-			var currentModule = topModule = module;
-			var controller = new module.controller;
+			var currentModule = topModule = module = module || {};
+			var controller = new (module.controller || function() {});
 			//controllers may call m.module recursively (via m.route redirects, for example)
 			//this conditional ensures only the last recursive m.module call is applied
 			if (currentModule === topModule) {
@@ -533,14 +538,12 @@ var m = (function app(window, undefined) {
 		}
 	};
 	m.redraw.strategy = m.prop();
+	var blank = function() {return ""}
 	function redraw() {
 		var forceRedraw = m.redraw.strategy() === "all";
-		if (forceRedraw){
-			cachedComponents={};
-		}
 		for (var i = 0, root; root = roots[i]; i++) {
 			if (controllers[i]) {
-				m.render(root, modules[i].view(controllers[i]), forceRedraw)
+				m.render(root, modules[i].view ? modules[i].view(controllers[i]) : blank(), forceRedraw)
 			}
 		}
 		//after rendering within a routed context, we need to scroll back to the top, and fetch the document title for history.pushState
@@ -551,31 +554,6 @@ var m = (function app(window, undefined) {
 		lastRedrawId = null;
 		lastRedrawCallTime = new Date;
 		m.redraw.strategy("diff")
-	}
-	function mergeAttrs(cellAttrs,attrs,filter){
-		var classAttrName = "class" in cellAttrs ? "class" : "className";
-		var classes = cellAttrs[classAttrName];
-		Object.keys(attrs).forEach(function(k){
-			if (k.indexOf('class')>=0){
-				classes += ' ' + attrs[k];
-			} else if (k!=filter) {
-				cellAttrs[k] = attrs[k];
-			}
-		}); 
-		if (classes) {
-			cellAttrs[classAttrName]=classes;
-		}
-		return cellAttrs;
-	}
-	var redrawnComponents={}, cachedComponents = {};
-	function redrawComponent (module, attrs, children) {
-		// once only component initialization
-		var id = (attrs.model && attrs.model.id) || attrs.id;
-		var ctrl = cachedComponents[id] || new module.controller(attrs.model);
-		cachedComponents[id]=ctrl;
-		var cell = module.view(ctrl,children);
-		mergeAttrs(cell.attrs,attrs,'model');
-		return cell;
 	}
 
 	var pendingRequests = 0;
@@ -617,24 +595,33 @@ var m = (function app(window, undefined) {
 			};
 			var listener = m.route.mode === "hash" ? "onhashchange" : "onpopstate";
 			window[listener] = function() {
-				if (currentRoute != normalizeRoute($location[m.route.mode])) {
-					redirect($location[m.route.mode])
+				var path = $location[m.route.mode]
+				if (m.route.mode === "pathname") path += $location.search
+				if (currentRoute != normalizeRoute(path)) {
+					redirect(path)
 				}
 			};
 			computePostRedrawHook = setScroll;
 			window[listener]()
 		}
 		//config: m.route
-		else if (arguments[0].addEventListener) {
+		else if (arguments[0].addEventListener || arguments[0].attachEvent) {
 			var element = arguments[0];
 			var isInitialized = arguments[1];
 			var context = arguments[2];
 			element.href = (m.route.mode !== 'pathname' ? $location.pathname : '') + modes[m.route.mode] + this.attrs.href;
-			element.removeEventListener("click", routeUnobtrusive);
-			element.addEventListener("click", routeUnobtrusive)
+			if (element.addEventListener) {
+				element.removeEventListener("click", routeUnobtrusive);
+				element.addEventListener("click", routeUnobtrusive)
+			}
+			else {
+				element.detachEvent("onclick", routeUnobtrusive);
+				element.attachEvent("onclick", routeUnobtrusive)
+			}
 		}
 		//m.route(route, params)
 		else if (type.call(arguments[0]) === STRING) {
+			var oldRoute = currentRoute;
 			currentRoute = arguments[0];
 			var args = arguments[1] || {}
 			var queryIndex = currentRoute.indexOf("?")
@@ -644,7 +631,7 @@ var m = (function app(window, undefined) {
 			var currentPath = queryIndex > -1 ? currentRoute.slice(0, queryIndex) : currentRoute
 			if (querystring) currentRoute = currentPath + (currentPath.indexOf("?") === -1 ? "?" : "&") + querystring;
 
-			var shouldReplaceHistoryEntry = (arguments.length === 3 ? arguments[2] : arguments[1]) === true;
+			var shouldReplaceHistoryEntry = (arguments.length === 3 ? arguments[2] : arguments[1]) === true || oldRoute === arguments[0];
 
 			if (window.history.pushState) {
 				computePostRedrawHook = function() {
@@ -653,7 +640,10 @@ var m = (function app(window, undefined) {
 				};
 				redirect(modes[m.route.mode] + currentRoute)
 			}
-			else $location[m.route.mode] = currentRoute
+			else {
+				$location[m.route.mode] = currentRoute
+				redirect(modes[m.route.mode] + currentRoute)
+			}
 		}
 	};
 	m.route.param = function(key) {
@@ -661,7 +651,9 @@ var m = (function app(window, undefined) {
 		return routeParams[key]
 	};
 	m.route.mode = "search";
-	function normalizeRoute(route) {return route.slice(modes[m.route.mode].length)}
+	function normalizeRoute(route) {
+		return route.slice(modes[m.route.mode].length)
+	}
 	function routeByValue(root, router, path) {
 		routeParams = {};
 
@@ -669,6 +661,15 @@ var m = (function app(window, undefined) {
 		if (queryStart !== -1) {
 			routeParams = parseQueryString(path.substr(queryStart + 1, path.length));
 			path = path.substr(0, queryStart)
+		}
+
+		// Get all routes and check if there's
+		// an exact match for the current path
+		var keys = Object.keys(router);
+		var index = keys.indexOf(path);
+		if(index !== -1){
+			m.module(root, router[keys [index]]);
+			return true;
 		}
 
 		for (var route in router) {
@@ -695,8 +696,9 @@ var m = (function app(window, undefined) {
 		if (e.ctrlKey || e.metaKey || e.which === 2) return;
 		if (e.preventDefault) e.preventDefault();
 		else e.returnValue = false;
-		var currentTarget = e.currentTarget || this;
+		var currentTarget = e.currentTarget || e.srcElement;
 		var args = m.route.mode === "pathname" && currentTarget.search ? parseQueryString(currentTarget.search.slice(1)) : {};
+		while (currentTarget && currentTarget.nodeName.toUpperCase() != "A") currentTarget = currentTarget.parentNode
 		m.route(currentTarget[m.route.mode].slice(modes[m.route.mode].length), args)
 	}
 	function setScroll() {
@@ -707,20 +709,24 @@ var m = (function app(window, undefined) {
 		var str = [];
 		for(var prop in object) {
 			var key = prefix ? prefix + "[" + prop + "]" : prop, value = object[prop];
-			str.push(value != null && type.call(value) === OBJECT ? buildQueryString(value, key) : encodeURIComponent(key) + "=" + encodeURIComponent(value))
+			var valueType = type.call(value)
+			var pair = value != null && (valueType === OBJECT) ?
+				buildQueryString(value, key) :
+				valueType === ARRAY ?
+					value.map(function(item) {return encodeURIComponent(key + "[]") + "=" + encodeURIComponent(item)}).join("&") :
+					encodeURIComponent(key) + "=" + encodeURIComponent(value)
+			str.push(pair)
 		}
 		return str.join("&")
 	}
+	
 	function parseQueryString(str) {
 		var pairs = str.split("&"), params = {};
 		for (var i = 0, len = pairs.length; i < len; i++) {
 			var pair = pairs[i].split("=");
-			params[decodeSpace(pair[0])] = pair[1] ? decodeSpace(pair[1]) : ""
+			params[decodeURIComponent(pair[0])] = pair[1] ? decodeURIComponent(pair[1]) : ""
 		}
 		return params
-	}
-	function decodeSpace(string) {
-		return decodeURIComponent(string.replace(/\+/g, " "))
 	}
 	function reset(root) {
 		var cacheKey = getCellCacheKey(root);
@@ -737,7 +743,8 @@ var m = (function app(window, undefined) {
 		var prop = m.prop();
 		promise.then(prop);
 		prop.then = function(resolve, reject) {
-			return propify(promise.then(resolve, reject))
+			promise = promise.then(resolve, reject).then(prop);
+			return prop;
 		};
 		return prop
 	}
@@ -903,7 +910,7 @@ var m = (function app(window, undefined) {
 			var script = $document.createElement("script");
 
 			window[callbackKey] = function(resp) {
-				$document.body.removeChild(script);
+				script.parentNode.removeChild(script);
 				options.onload({
 					type: "load",
 					target: {
@@ -914,7 +921,7 @@ var m = (function app(window, undefined) {
 			};
 
 			script.onerror = function(e) {
-				$document.body.removeChild(script);
+				script.parentNode.removeChild(script);
 
 				options.onerror({
 					type: "error",
@@ -1003,7 +1010,7 @@ var m = (function app(window, undefined) {
 			try {
 				e = e || event;
 				var unwrap = (e.type === "load" ? xhrOptions.unwrapSuccess : xhrOptions.unwrapError) || identity;
-				var response = unwrap(deserialize(extract(e.target, xhrOptions)));
+				var response = unwrap(deserialize(extract(e.target, xhrOptions)), e.target);
 				if (e.type === "load") {
 					if (type.call(response) === ARRAY && xhrOptions.type) {
 						for (var i = 0; i < response.length; i++) response[i] = new xhrOptions.type(response[i])
